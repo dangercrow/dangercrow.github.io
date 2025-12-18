@@ -1,278 +1,320 @@
-import React, { useMemo, useState } from "react";
-
-/**
- * React single-file app that ports the provided Python snippet to JavaScript.
- *
- * Features:
- * - Textarea input for copy/paste blocks of log permalinks/URIs
- * - Title input (default: Temple of Febe CM)
- * - Time input (default: 19:00 local)
- * - Fetches target HP% from dps.report JSON endpoint
- * - In-memory cache to avoid duplicate fetches for the same log URI
- * - Produces a Discord-friendly output block
- */
-
-// Simple in-memory cache (persists for the lifetime of the page)
-const hpCache = new Map();
-
-async function cachedGetHp(logUri) {
-  if (hpCache.has(logUri)) return hpCache.get(logUri);
-
-  const url = `https://dps.report/getJson?permalink=${encodeURIComponent(logUri)}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${logUri}`);
-  const json = await res.json();
-
-  // Python: json()['targets'][0]['healthPercents'][-1][1]
-  const targets = json?.targets;
-  const healthPercents = targets?.[0]?.healthPercents;
-  const last = Array.isArray(healthPercents) && healthPercents.length
-    ? healthPercents[healthPercents.length - 1]
-    : null;
-  const value = Array.isArray(last) ? last[1] : null;
-
-  if (typeof value !== "number") {
-    throw new Error(`Could not find healthPercents[-1][1] for ${logUri}`);
-  }
-
-  hpCache.set(logUri, value);
-  return value;
-}
-
-function pad2(n) {
-  return String(n).padStart(2, "0");
-}
-
-function localDateWithTimeToUnixSeconds({ hour, minute }) {
-  // Matches Python's: datetime.combine(date.today(), time(19)).astimezone().timestamp()
-  // In JS, we can construct a local Date and take getTime()/1000.
-  const now = new Date();
-  const dt = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate(),
-    hour,
-    minute,
-    0,
-    0
-  );
-  return Math.floor(dt.getTime() / 1000);
-}
-
-function formatHp(v) {
-  // Python: f"{v:.02f}" -> always 2 decimals
-  return v.toFixed(2);
-}
-
-function extractSortKey(logUri) {
-  // Python used: key=lambda l: l.split("-")[2]
-  // But it was sorting the *formatted line*; the intention appears to sort by the permalink's third hyphen-separated segment.
-  // We'll apply it directly to the logUri.
-  const parts = String(logUri).split("-");
-  return parts[2] ?? "";
-}
-
-export default function App() {
-  const [title, setTitle] = useState("Temple of Febe CM");
-  const [timeStr, setTimeStr] = useState("19:00");
-  const [input, setInput] = useState("");
-
-  const [isRunning, setIsRunning] = useState(false);
-  const [error, setError] = useState("");
-  const [output, setOutput] = useState("");
-
-  const parsedTime = useMemo(() => {
-    const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(timeStr.trim());
-    if (!m) return null;
-    return { hour: Number(m[1]), minute: Number(m[2]) };
-  }, [timeStr]);
-
-  const logUris = useMemo(() => {
-    // Python: [i for i in copy_paste_block.splitlines() if i]
-    // Here we also trim and ignore blank lines.
-    return input
-      .split(/\r?\n/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-  }, [input]);
-
-  async function run() {
-    setError("");
-    setOutput("");
-
-    if (!parsedTime) {
-      setError("Time must be HH:MM (24h), e.g. 19:00");
-      return;
-    }
-
-    if (logUris.length === 0) {
-      setError("Paste at least one log URI/permalink (one per line).\n");
-      return;
-    }
-
-    setIsRunning(true);
-    try {
-      // data = {log_uri: cached_get_hp(log_uri) for log_uri in log_uris}
-      const entries = await Promise.all(
-        logUris.map(async (uri) => {
-          const hp = await cachedGetHp(uri);
-          return [uri, hp];
-        })
-      );
-
-      // by_time = sorted([...], key=...)
-      const lines = entries
-        .map(([uri, hp]) => ({
-          uri,
-          hp,
-          line: `\`${formatHp(hp)}\` ${uri}`,
-          key: extractSortKey(uri),
-        }))
-        .sort((a, b) => String(a.key).localeCompare(String(b.key)))
-        .map((x) => x.line);
-
-      const ts = localDateWithTimeToUnixSeconds(parsedTime);
-      const header = `${title} <t:${ts}:F>`;
-      setOutput([header, ...lines].join("\n"));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setIsRunning(false);
-    }
-  }
-
-  async function copyOut() {
-    if (!output) return;
-    try {
-      await navigator.clipboard.writeText(output);
-    } catch {
-      // Fallback: select text
-      const el = document.getElementById("output");
-      if (el && "select" in el) {
-        el.select();
-        document.execCommand("copy");
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>dps.report HP% Formatter</title>
+    <style>
+      :root {
+        --bg: #fafafa;
+        --card: #ffffff;
+        --text: #18181b;
+        --muted: #52525b;
+        --border: #e4e4e7;
+        --danger-bg: #fef2f2;
+        --danger-border: #fecaca;
+        --danger-text: #991b1b;
+        --btn: #18181b;
+        --btn-text: #ffffff;
       }
-    }
-  }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+        background: var(--bg);
+        color: var(--text);
+      }
+      .wrap { max-width: 980px; margin: 0 auto; padding: 24px; }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 18px;
+        box-shadow: 0 1px 2px rgba(0,0,0,.04);
+        margin-bottom: 18px;
+      }
+      h1 { font-size: 20px; margin: 0 0 6px; }
+      h2 { font-size: 16px; margin: 0; }
+      p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.4; }
+      label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 12px;
+        margin-top: 14px;
+      }
+      @media (min-width: 820px) {
+        .grid { grid-template-columns: 1fr 1fr auto; align-items: end; }
+      }
+      input, textarea {
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 10px 12px;
+        font-size: 13px;
+        outline: none;
+        background: white;
+      }
+      textarea { min-height: 180px; resize: vertical; }
+      .row { display: flex; gap: 10px; align-items: center; }
+      .btn {
+        border: 1px solid transparent;
+        border-radius: 16px;
+        padding: 10px 14px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        user-select: none;
+      }
+      .btn.primary { background: var(--btn); color: var(--btn-text); }
+      .btn.ghost { background: white; border-color: var(--border); color: var(--text); }
+      .btn:disabled { opacity: .6; cursor: not-allowed; }
+      .meta { margin-top: 8px; font-size: 12px; color: var(--muted); }
+      .error {
+        margin-top: 14px;
+        border: 1px solid var(--danger-border);
+        background: var(--danger-bg);
+        color: var(--danger-text);
+        border-radius: 16px;
+        padding: 10px 12px;
+        font-size: 13px;
+        white-space: pre-wrap;
+      }
+      .header-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+      .note { font-size: 12px; color: var(--muted); margin-top: 10px; }
+      code.kbd { background: #f4f4f5; border: 1px solid var(--border); padding: 2px 6px; border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <h1>dps.report HP% Formatter</h1>
+        <p>
+          Paste permalinks/URIs (one per line). Click run to fetch the final target HP% and build a Discord-friendly block.
+        </p>
 
-  return (
-    <div className="min-h-screen bg-zinc-50 text-zinc-900 p-6">
-      <div className="max-w-4xl mx-auto space-y-6">
-        <div className="bg-white rounded-2xl shadow-sm border border-zinc-200 p-5">
-          <div className="flex flex-col gap-2">
-            <h1 className="text-xl font-semibold">dps.report HP% Formatter</h1>
-            <p className="text-sm text-zinc-600">
-              Paste permalinks/URIs (one per line). Click run to fetch the final target HP% and build a Discord-friendly block.
-            </p>
-          </div>
+        <div class="grid">
+          <label>
+            <span><strong>Title</strong></span>
+            <input id="title" value="Temple of Febe CM" placeholder="Temple of Febe CM" />
+          </label>
 
-          <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
-            <label className="flex flex-col gap-1">
-              <span className="text-sm font-medium">Title</span>
-              <input
-                className="rounded-xl border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-200"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="Temple of Febe CM"
-              />
-            </label>
+          <label>
+            <span><strong>Time (local)</strong></span>
+            <input id="time" value="19:00" placeholder="19:00" inputmode="numeric" />
+            <span class="meta">Used for <code class="kbd">&lt;t:…:F&gt;</code> timestamp (today).</span>
+          </label>
 
-            <label className="flex flex-col gap-1">
-              <span className="text-sm font-medium">Time (local)</span>
-              <input
-                className="rounded-xl border border-zinc-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-200"
-                value={timeStr}
-                onChange={(e) => setTimeStr(e.target.value)}
-                placeholder="19:00"
-                inputMode="numeric"
-              />
-              <span className="text-xs text-zinc-500">Used for &lt;t:…:F&gt; timestamp (today).</span>
-            </label>
-
-            <div className="flex items-end gap-2">
-              <button
-                onClick={run}
-                disabled={isRunning}
-                className="w-full md:w-auto rounded-2xl px-4 py-2 text-sm font-medium bg-zinc-900 text-white disabled:opacity-60"
-              >
-                {isRunning ? "Running…" : "Run"}
-              </button>
-              <button
-                onClick={() => {
-                  hpCache.clear();
-                  setError("");
-                }}
-                className="rounded-2xl px-4 py-2 text-sm font-medium border border-zinc-200 bg-white"
-                title="Clears the in-memory cache"
-              >
-                Clear cache
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-4">
-            <label className="flex flex-col gap-1">
-              <span className="text-sm font-medium">Input</span>
-              <textarea
-                className="rounded-2xl border border-zinc-200 p-3 text-sm min-h-[180px] focus:outline-none focus:ring-2 focus:ring-zinc-200"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder={[
-                  "https://dps.report/abcd-20250101-190000_boss",
-                  "https://dps.report/efgh-20250101-190900_boss",
-                ].join("\n")}
-              />
-            </label>
-            <div className="mt-2 text-xs text-zinc-500">
-              Parsed: {logUris.length} line{logUris.length === 1 ? "" : "s"}
-            </div>
-          </div>
-
-          {error ? (
-            <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-3 text-sm text-red-800 whitespace-pre-wrap">
-              {error}
-            </div>
-          ) : null}
-        </div>
-
-        <div className="bg-white rounded-2xl shadow-sm border border-zinc-200 p-5">
-          <div className="flex items-center justify-between gap-3">
-            <h2 className="text-lg font-semibold">Output</h2>
-            <div className="flex gap-2">
-              <button
-                onClick={copyOut}
-                disabled={!output}
-                className="rounded-2xl px-4 py-2 text-sm font-medium bg-white border border-zinc-200 disabled:opacity-60"
-              >
-                Copy
-              </button>
-              <button
-                onClick={() => setOutput("")}
-                disabled={!output}
-                className="rounded-2xl px-4 py-2 text-sm font-medium bg-white border border-zinc-200 disabled:opacity-60"
-              >
-                Clear
-              </button>
-            </div>
-          </div>
-
-          <textarea
-            id="output"
-            readOnly
-            className="mt-3 rounded-2xl border border-zinc-200 p-3 text-sm min-h-[180px] w-full focus:outline-none"
-            value={output}
-            placeholder="Run to generate output…"
-          />
-
-          <div className="mt-2 text-xs text-zinc-500">
-            Notes: sorting matches the Python intent (third hyphen-separated segment of the URI). Cache is per page load.
+          <div class="row">
+            <button id="run" class="btn primary">Run</button>
+            <button id="clearCache" class="btn ghost" title="Clears the in-memory cache">Clear cache</button>
           </div>
         </div>
 
-        <div className="text-xs text-zinc-500">
-          Tip: If you hit CORS issues in some environments, run this behind a tiny proxy (or in a context where dps.report allows your origin).
+        <div style="margin-top: 14px;">
+          <label>
+            <span><strong>Input</strong></span>
+            <textarea id="input" placeholder="https://dps.report/abcd-20250101-190000_boss
+https://dps.report/efgh-20250101-190900_boss"></textarea>
+          </label>
+          <div id="parsed" class="meta">Parsed: 0 lines</div>
+        </div>
+
+        <div id="error" class="error" style="display:none"></div>
+      </div>
+
+      <div class="card">
+        <div class="header-row">
+          <h2>Output</h2>
+          <div class="row">
+            <button id="copy" class="btn ghost" disabled>Copy</button>
+            <button id="clearOut" class="btn ghost" disabled>Clear</button>
+          </div>
+        </div>
+
+        <textarea id="output" readonly placeholder="Run to generate output…"></textarea>
+
+        <div class="note">
+          Notes: sorting matches the Python intent (third hyphen-separated segment of the URI). Cache is per page load.
         </div>
       </div>
+
+      <div class="note">
+        Tip: If you hit CORS issues, host behind a tiny proxy (or in a context where dps.report allows your origin).
+      </div>
     </div>
-  );
-}
+
+    <script>
+      // ===== Port of your Python snippet (pure JS) =====
+
+      // Simple in-memory cache (persists for the lifetime of the page)
+      const hpCache = new Map();
+
+      async function cachedGetHp(logUri) {
+        if (hpCache.has(logUri)) return hpCache.get(logUri);
+
+        const url = `https://dps.report/getJson?permalink=${encodeURIComponent(logUri)}`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${logUri}`);
+        const json = await res.json();
+
+        // Python: json()['targets'][0]['healthPercents'][-1][1]
+        const targets = json?.targets;
+        const healthPercents = targets?.[0]?.healthPercents;
+        const last = Array.isArray(healthPercents) && healthPercents.length
+          ? healthPercents[healthPercents.length - 1]
+          : null;
+        const value = Array.isArray(last) ? last[1] : null;
+
+        if (typeof value !== "number") {
+          throw new Error(`Could not find healthPercents[-1][1] for ${logUri}`);
+        }
+
+        hpCache.set(logUri, value);
+        return value;
+      }
+
+      function localDateWithTimeToUnixSeconds(hour, minute) {
+        // Matches Python's:
+        // datetime.combine(date.today(), time(19)).astimezone().timestamp()
+        // In JS: create local Date and convert to Unix seconds.
+        const now = new Date();
+        const dt = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute, 0, 0);
+        return Math.floor(dt.getTime() / 1000);
+      }
+
+      function formatHp(v) {
+        // Python: f"{v:.02f}" -> always 2 decimals
+        return Number(v).toFixed(2);
+      }
+
+      function extractSortKey(logUri) {
+        // Python used: key=lambda l: l.split("-")[2]
+        // We'll apply that intent to the URI itself.
+        const parts = String(logUri).split("-");
+        return parts[2] ?? "";
+      }
+
+      function parseLines(text) {
+        return text
+          .split(/\r?\n/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+      }
+
+      function parseTimeHHMM(s) {
+        const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(s).trim());
+        if (!m) return null;
+        return { hour: Number(m[1]), minute: Number(m[2]) };
+      }
+
+      // ===== UI wiring =====
+      const elTitle = document.getElementById("title");
+      const elTime = document.getElementById("time");
+      const elInput = document.getElementById("input");
+      const elOutput = document.getElementById("output");
+      const elParsed = document.getElementById("parsed");
+      const elError = document.getElementById("error");
+
+      const btnRun = document.getElementById("run");
+      const btnCopy = document.getElementById("copy");
+      const btnClearOut = document.getElementById("clearOut");
+      const btnClearCache = document.getElementById("clearCache");
+
+      function setError(msg) {
+        if (!msg) {
+          elError.style.display = "none";
+          elError.textContent = "";
+          return;
+        }
+        elError.style.display = "block";
+        elError.textContent = msg;
+      }
+
+      function setRunning(isRunning) {
+        btnRun.disabled = isRunning;
+        btnRun.textContent = isRunning ? "Running…" : "Run";
+        elTitle.disabled = isRunning;
+        elTime.disabled = isRunning;
+        elInput.disabled = isRunning;
+        btnClearCache.disabled = isRunning;
+      }
+
+      function updateParsedCount() {
+        const count = parseLines(elInput.value).length;
+        elParsed.textContent = `Parsed: ${count} line${count === 1 ? "" : "s"}`;
+      }
+
+      function setOutput(text) {
+        elOutput.value = text || "";
+        const has = Boolean(text);
+        btnCopy.disabled = !has;
+        btnClearOut.disabled = !has;
+      }
+
+      elInput.addEventListener("input", updateParsedCount);
+      updateParsedCount();
+
+      btnClearCache.addEventListener("click", () => {
+        hpCache.clear();
+        setError("");
+      });
+
+      btnClearOut.addEventListener("click", () => setOutput(""));
+
+      btnCopy.addEventListener("click", async () => {
+        const text = elOutput.value;
+        if (!text) return;
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch {
+          // Fallback: select + execCommand
+          elOutput.focus();
+          elOutput.select();
+          document.execCommand("copy");
+        }
+      });
+
+      btnRun.addEventListener("click", async () => {
+        setError("");
+        setOutput("");
+
+        const t = parseTimeHHMM(elTime.value);
+        if (!t) {
+          setError("Time must be HH:MM (24h), e.g. 19:00");
+          return;
+        }
+
+        const logUris = parseLines(elInput.value);
+        if (logUris.length === 0) {
+          setError("Paste at least one log URI/permalink (one per line).\n");
+          return;
+        }
+
+        setRunning(true);
+        try {
+          // data = {log_uri: cached_get_hp(log_uri) for log_uri in log_uris}
+          const entries = await Promise.all(
+            logUris.map(async (uri) => {
+              const hp = await cachedGetHp(uri);
+              return { uri, hp, key: extractSortKey(uri) };
+            })
+          );
+
+          // by_time = sorted([...], key=...)
+          entries.sort((a, b) => String(a.key).localeCompare(String(b.key)));
+
+          const lines = entries.map(({ uri, hp }) => `\`${formatHp(hp)}\` ${uri}`);
+          const ts = localDateWithTimeToUnixSeconds(t.hour, t.minute);
+          const header = `${elTitle.value || "Temple of Febe CM"} <t:${ts}:F>`;
+
+          setOutput([header, ...lines].join("\n"));
+        } catch (e) {
+          setError(e instanceof Error ? e.message : String(e));
+        } finally {
+          setRunning(false);
+        }
+      });
+    </script>
+  </body>
+</html>
