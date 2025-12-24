@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clash Royale Merge Tactics Clan Ranking</title>
+    <style>
+      :root {
+        --bg: #070d1f;
+        --panel: rgba(255,255,255,0.05);
+        --text: #e2e8f0;
+        --muted: #94a3b8;
+        --accent: #22d3ee;
+        --border: #1e293b;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Inter", ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+        background: radial-gradient(circle at 12% 18%, rgba(34,211,238,0.1), transparent 28%),
+                    radial-gradient(circle at 80% 0%, rgba(34,211,238,0.08), transparent 32%),
+                    var(--bg);
+        color: var(--text);
+      }
+      .wrap {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 48px 20px 64px;
+      }
+      .card {
+        width: min(780px, 100%);
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        background: linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0));
+        padding: 22px;
+        box-shadow: 0 16px 44px rgba(0,0,0,0.35);
+        display: grid;
+        gap: 12px;
+      }
+      h1 { margin: 0; font-size: 28px; letter-spacing: -0.01em; }
+      p { margin: 0; line-height: 1.6; color: var(--muted); }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--panel);
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .note {
+        border: 1px dashed var(--border);
+        border-radius: 14px;
+        padding: 14px;
+        background: rgba(255,255,255,0.02);
+        color: var(--text);
+      }
+      a {
+        color: var(--accent);
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <section class="card">
+        <div class="pill">Clash Royale · Merge Tactics</div>
+        <h1>Clan trophy ranking (current season)</h1>
+        <p>
+          This page will display the clan members ranked by total Merge Tactics trophies for the ongoing season.
+          Data wiring is pending—once available, the leaderboard will show each member’s name, trophies, and update time.
+        </p>
+        <div class="note">
+          Placeholder only. If you have a preferred data source or format (CSV upload, API endpoint, manual entry),
+          let me know and I’ll wire it up here.
+        </div>
+        <p><a href="/">← Back to projects</a></p>
+      </section>
+    </div>
+  </body>
+</html>
