@@ -4,19 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Optimal Allocation (calculus simplified)</title>
-  <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; max-width: 720px; margin: 24px auto; padding: 0 16px; }
-    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-    input, button { font-size: 16px; padding: 6px 10px; }
-    #out { background: #f6f8fa; padding: 12px; border-radius: 10px; white-space: pre-wrap; }
-    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e5e7eb; }
-    thead th { position: sticky; top: 0; background: white; }
-    tbody tr:hover { background: #f6f8fa; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-    .chg { background: #fff7cc; }
-    .cell { border-radius: 6px; }
-  </style>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="app.js"></script>
 </head>
 <body>
   <h1>Optimal Distribution (calculus simplified)</h1>
@@ -30,12 +19,11 @@
   <div class="row">
     <label for="N">Total points (N &gt; 0):</label>
     <input id="N" type="number" min="1" step="1" value="10" />
-    <!-- Live update: no button needed -->
   </div>
 
   <div id="out"></div>
 
-  <h2 style="margin-top:16px;">Next optimal allocations</h2>
+  <h2 class="section-title">Next optimal allocations</h2>
   <table id="tbl" aria-label="Optimal allocations table">
     <thead>
       <tr>
@@ -48,124 +36,5 @@
     <tbody></tbody>
   </table>
 
-  <script>
-    // Objective: (1 + 0.1*(N-x)) * (1 + 0.04*x)^2
-    function F(x, N) {
-      const y = N - x;
-      return (1 + 0.1 * y) * (1 + 0.04 * x) ** 2;
-    }
-
-    // Derivative is quadratic:
-    // F'(x) = (0.008N - 0.02) + (0.00032N - 0.0128)x - 0.00048 x^2
-    // => 0.00048 x^2 + (0.0128 - 0.00032N)x + (0.02 - 0.008N) = 0
-    function derivativeRootsInRange(N) {
-      const a = 0.00048;
-      const b = 0.0128 - 0.00032 * N;
-      const c = 0.02 - 0.008 * N;
-
-      const disc = b * b - 4 * a * c;
-      if (disc < 0) return [];
-
-      const s = Math.sqrt(disc);
-      const r1 = (-b + s) / (2 * a);
-      const r2 = (-b - s) / (2 * a);
-
-      const roots = [];
-      if (0 <= r1 && r1 <= N) roots.push(r1);
-      if (0 <= r2 && r2 <= N) roots.push(r2);
-      return roots;
-    }
-
-    // Calculus insight: global max on [0,N] is at an endpoint or a critical point.
-    // For integer x, check endpoints + nearest integers around each critical point.
-    function optimalAllocation(N) {
-      const roots = derivativeRootsInRange(N);
-
-      const candidates = new Set([0, N]); // always include endpoints
-      for (const r of roots) {
-        candidates.add(Math.floor(r));
-        candidates.add(Math.ceil(r));
-      }
-
-      let bestX = 0;
-      let bestV = -Infinity;
-
-      for (const x of candidates) {
-        if (x < 0 || x > N) continue;
-        const v = F(x, N);
-        if (v > bestV) {
-          bestV = v;
-          bestX = x;
-        }
-      }
-
-      return { x: bestX, y: N - bestX, value: bestV, roots };
-    }
-
-    function run() {
-      const out = document.getElementById('out');
-      const tblBody = document.querySelector('#tbl tbody');
-      const N0 = Number.parseInt(document.getElementById('N').value, 10);
-
-      if (!Number.isFinite(N0) || N0 <= 0) {
-        out.textContent = "Please enter an integer N > 0.";
-        tblBody.innerHTML = "";
-        return;
-      }
-
-      // Current N summary
-      const cur = optimalAllocation(N0);
-      out.innerHTML =
-        `<div class="mono">` +
-        `N = ${N0}<br>` +
-        `Critical point roots in [0,N] (real): ${cur.roots.length ? cur.roots.map(r => r.toFixed(6)).join(", ") : "(none)"}<br><br>` +
-        `Optimal integer allocation:<br>` +
-        ` - Speed (x):  ${cur.x}<br>` +
-        ` - Damage (y): ${cur.y}<br><br>` +
-        `F(x,N) = ${cur.value.toFixed(6)}` +
-        `</div>`;
-
-      // Table: N, N+1, ... N+K
-      const K = 10; // how many "next" values to show (inclusive of N)
-
-      // Baseline: compute previous N (not shown) so we can highlight changes in the first visible row
-      let prev = optimalAllocation(Math.max(1, N0 - 1));
-
-      const rows = [];
-      for (let i = 0; i < K; i++) {
-        const N = N0 + i;
-        const r = optimalAllocation(N);
-
-        const xChanged = r.x !== prev.x;
-        const yChanged = r.y !== prev.y;
-        // value is floating point; compare with a tiny tolerance to avoid false positives
-        const vChanged = Math.abs(r.value - prev.value) > 1e-12;
-
-        const xCell = `<td class="mono cell${xChanged ? ' chg' : ''}">${r.x}</td>`;
-        const yCell = `<td class="mono cell${yChanged ? ' chg' : ''}">${r.y}</td>`;
-        const vText = r.value.toFixed(6);
-        const vCell = `<td class="mono">${vText}</td>`;
-
-        rows.push(
-          `<tr>` +
-          `<td class="mono">${N}</td>` +
-          xCell +
-          yCell +
-          vCell +
-          `</tr>`
-        );
-
-        prev = r;
-      }
-      tblBody.innerHTML = rows.join('');
-    }
-
-    // Recompute live as the input changes
-    const input = document.getElementById('N');
-    input.addEventListener('input', run);
-    input.addEventListener('change', run);
-
-    run();
-  </script>
 </body>
 </html>
