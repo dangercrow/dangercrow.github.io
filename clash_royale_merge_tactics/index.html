@@ -1,85 +1,248 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Clash Royale Merge Tactics Clan Ranking</title>
-    <style>
-      :root {
-        --bg: #070d1f;
-        --panel: rgba(255,255,255,0.05);
-        --text: #e2e8f0;
-        --muted: #94a3b8;
-        --accent: #22d3ee;
-        --border: #1e293b;
+<head>
+  <meta charset="utf-8" />
+  <title>Clash Royale – Barebones</title>
+  <script src="https://cdn.jsdelivr.net/npm/ag-grid-community/dist/ag-grid-community.min.js"></script>
+</head>
+<body style="margin:0; height:100vh; display:flex; flex-direction:column;">
+  <div style="display:flex; gap:8px; padding:8px; align-items:center;">
+    <label>
+      API Key:
+      <input type="text" id="apiKey" />
+    </label>
+
+    <label>
+      Clan Tag:
+      <input type="text" id="clanTag" value="#8QRJLC8R" />
+    </label>
+
+    <button id="goBtn">Go</button>
+  </div>
+
+  <div id="grid" style="flex:1;"></div>
+
+  <script>
+    const WORKER_BASE = 'https://curly-cell-5728.dangercrow-cloudflare.workers.dev';
+
+    const apiKeyInput = document.getElementById('apiKey');
+    const clanTagInput = document.getElementById('clanTag');
+    const goBtn = document.getElementById('goBtn');
+
+    let isRunning = false;
+    let stopRequested = false;
+
+    // Load API key from localStorage on page load
+    const savedKey = localStorage.getItem('clashRoyaleApiKey');
+    if (savedKey) apiKeyInput.value = savedKey;
+
+    // --- AG Grid setup (bare minimum)
+    const gridDiv = document.getElementById('grid');
+
+    const gridOptions = {
+      columnDefs: [
+        { headerName: 'Player', field: 'name', flex: 2 },
+        { headerName: 'Tag', field: 'tag', flex: 1 },
+        { headerName: 'Trophy Road', field: 'trophyRoad', flex: 1, valueFormatter: p => p.value ?? '—' },
+        { headerName: 'Merge Tactics', field: 'mergeTactics', flex: 1, valueFormatter: p => p.value ?? '—' }
+      ],
+      rowData: [],
+      defaultColDef: { sortable: true, filter: true, resizable: true },
+      getRowId: p => p.data.tag
+    };
+
+    // Support both newer/older AG Grid global APIs
+    const gridApi = agGrid?.createGrid
+      ? agGrid.createGrid(gridDiv, gridOptions)
+      : (new agGrid.Grid(gridDiv, gridOptions), gridOptions.api);
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function hasActiveSort() {
+      const state = (typeof gridApi.getColumnState === 'function')
+        ? gridApi.getColumnState()
+        : (gridApi.getColumnApi && typeof gridApi.getColumnApi().getColumnState === 'function')
+          ? gridApi.getColumnApi().getColumnState()
+          : null;
+
+      return Array.isArray(state) && state.some(s => s && s.sort);
+    }
+
+    function reapplySortIfNeeded() {
+      if (!hasActiveSort()) return;
+      if (typeof gridApi.refreshClientSideRowModel === 'function') {
+        gridApi.refreshClientSideRowModel('sort');
+      } else if (typeof gridApi.onSortChanged === 'function') {
+        gridApi.onSortChanged();
       }
-      * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        font-family: "Inter", ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
-        background: radial-gradient(circle at 12% 18%, rgba(34,211,238,0.1), transparent 28%),
-                    radial-gradient(circle at 80% 0%, rgba(34,211,238,0.08), transparent 32%),
-                    var(--bg);
-        color: var(--text);
+    }
+
+    function getMergeTactics(player) {
+      // Use ONLY the progress key mechanism as specified:
+      // Find a key starting with "AutoChess_" and read its `.trophies` value.
+      const progress = player?.progress;
+      if (!progress || typeof progress !== 'object') return null;
+
+      for (const [key, value] of Object.entries(progress)) {
+        if (typeof key === 'string' && key.startsWith('AutoChess_')) {
+          const t = value?.trophies;
+          if (Number.isFinite(t)) return t;
+        }
       }
-      .wrap {
-        min-height: 100vh;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 48px 20px 64px;
+
+      return null;
+    }
+
+    async function fetchClanMembers({ key, clanTag }) {
+      const encodedTag = encodeURIComponent(clanTag.startsWith('#') ? clanTag : ('#' + clanTag));
+
+      const res = await fetch(`${WORKER_BASE}/clans/${encodedTag}/members`, {
+        headers: { 'Authorization': 'Bearer ' + key }
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`HTTP ${res.status} ${res.statusText} ${text}`);
       }
-      .card {
-        width: min(780px, 100%);
-        border: 1px solid var(--border);
-        border-radius: 18px;
-        background: linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0));
-        padding: 22px;
-        box-shadow: 0 16px 44px rgba(0,0,0,0.35);
-        display: grid;
-        gap: 12px;
+
+      const data = await res.json();
+      return Array.isArray(data?.items) ? data.items : [];
+    }
+
+    async function fetchPlayer({ key, playerTag }) {
+      const encodedTag = encodeURIComponent(playerTag.startsWith('#') ? playerTag : ('#' + playerTag));
+
+      const res = await fetch(`${WORKER_BASE}/players/${encodedTag}`, {
+        headers: { 'Authorization': 'Bearer ' + key }
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`HTTP ${res.status} ${res.statusText} ${text}`);
       }
-      h1 { margin: 0; font-size: 28px; letter-spacing: -0.01em; }
-      p { margin: 0; line-height: 1.6; color: var(--muted); }
-      .pill {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        padding: 8px 12px;
-        border-radius: 999px;
-        border: 1px solid var(--border);
-        background: var(--panel);
-        color: var(--muted);
-        font-size: 12px;
+
+      return await res.json();
+    }
+
+    function applyDefaultSortMergeTacticsDesc() {
+      if (typeof gridApi.applyColumnState === 'function') {
+        gridApi.applyColumnState({
+          state: [{ colId: 'mergeTactics', sort: 'desc' }],
+          defaultState: { sort: null }
+        });
       }
-      .note {
-        border: 1px dashed var(--border);
-        border-radius: 14px;
-        padding: 14px;
-        background: rgba(255,255,255,0.02);
-        color: var(--text);
+    }
+
+    // --- Self-tests (very small, no network)
+    (function runSelfTests() {
+      try {
+        const sample = {
+          progress: {
+            "AutoChess_2025_Dec": { trophies: 2036 }
+          }
+        };
+        const got = getMergeTactics(sample);
+        console.assert(got === 2036, 'getMergeTactics should return trophies from AutoChess_* key');
+
+        const none = getMergeTactics({ progress: { "Royals_2v2_202510": { trophies: 1530 } } });
+        console.assert(none === null, 'getMergeTactics should return null when no AutoChess_* key is present');
+      } catch (e) {
+        console.warn('Self-tests failed:', e);
       }
-      a {
-        color: var(--accent);
-        font-weight: 600;
+    })();
+
+    // Start/Stop fetch loop
+    goBtn.addEventListener('click', async () => {
+      // If already running, request stop.
+      if (isRunning) {
+        stopRequested = true;
+        return;
       }
-    </style>
-  </head>
-  <body>
-    <div class="wrap">
-      <section class="card">
-        <div class="pill">Clash Royale · Merge Tactics</div>
-        <h1>Clan trophy ranking (current season)</h1>
-        <p>
-          This page will display the clan members ranked by total Merge Tactics trophies for the ongoing season.
-          Data wiring is pending—once available, the leaderboard will show each member’s name, trophies, and update time.
-        </p>
-        <div class="note">
-          Placeholder only. If you have a preferred data source or format (CSV upload, API endpoint, manual entry),
-          let me know and I’ll wire it up here.
-        </div>
-        <p><a href="/">← Back to projects</a></p>
-      </section>
-    </div>
-  </body>
+
+      const key = apiKeyInput.value.trim();
+      const clanTag = clanTagInput.value.trim();
+
+      if (!key) {
+        console.error('No API key provided');
+        return;
+      }
+      if (!clanTag) {
+        console.error('No clan tag provided');
+        return;
+      }
+
+      // Begin run
+      stopRequested = false;
+      isRunning = true;
+      goBtn.textContent = 'Stop';
+
+      try {
+        // Store the key right before the first request
+        localStorage.setItem('clashRoyaleApiKey', key);
+
+        const members = await fetchClanMembers({ key, clanTag });
+
+        // Seed the grid with placeholders (nulls). Rendering shows placeholders via valueFormatter.
+        const rows = members.map(m => ({
+          ...m,
+          trophyRoad: null,
+          mergeTactics: null
+        }));
+
+        if (gridApi.setGridOption) {
+          gridApi.setGridOption('rowData', rows);
+        } else {
+          gridApi.setRowData(rows);
+        }
+
+        // Default sort (only at start)
+        applyDefaultSortMergeTacticsDesc();
+
+        // Sequentially fetch each player's info (200ms delay) and update rows as we go
+        for (const m of members) {
+          if (stopRequested) break;
+
+          try {
+            // Store key right before each request
+            localStorage.setItem('clashRoyaleApiKey', key);
+
+            const player = await fetchPlayer({ key, playerTag: m.tag });
+            const trophyRoad = Number.isFinite(player?.trophies) ? player.trophies : null;
+            const mergeTactics = getMergeTactics(player);
+
+            // Log distilled info
+            console.log({
+              name: m.name,
+              tag: m.tag,
+              trophyRoad,
+              mergeTactics
+            });
+
+            const node = gridApi.getRowNode(m.tag);
+            if (node) {
+              node.setData({
+                ...node.data,
+                trophyRoad,
+                mergeTactics
+              });
+              reapplySortIfNeeded();
+            }
+          } catch (e) {
+            console.error('Error fetching player info for', m.tag, e);
+          }
+
+          await sleep(200);
+        }
+      } catch (err) {
+        console.error('Error fetching clan members on Go:', err);
+      } finally {
+        isRunning = false;
+        stopRequested = false;
+        goBtn.textContent = 'Go';
+      }
+    });
+  </script>
+</body>
 </html>
