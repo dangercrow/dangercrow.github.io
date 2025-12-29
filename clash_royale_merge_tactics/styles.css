@@ -41,6 +41,13 @@ body {
   background: #0b1225;
 }
 
+.primary-action:disabled {
+  background: #1f2937;
+  color: #94a3b8;
+  border-color: #1f2937;
+  cursor: not-allowed;
+}
+
 .grid-area {
   flex: 1;
 }

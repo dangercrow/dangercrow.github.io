@@ -94,7 +94,6 @@ function initClashRoyaleApp() {
   if (!apiKeyInput || !clanTagInput || !goBtn || !gridDiv) return;
 
   let isRunning = false;
-  let stopRequested = false;
 
   const savedKey = localStorage.getItem('clashRoyaleApiKey');
   if (savedKey) apiKeyInput.value = savedKey;
@@ -139,10 +138,7 @@ function initClashRoyaleApp() {
   }
 
   goBtn.addEventListener('click', async () => {
-    if (isRunning) {
-      stopRequested = true;
-      return;
-    }
+    if (isRunning) return;
 
     const key = apiKeyInput.value.trim();
     const clanTag = clanTagInput.value.trim();
@@ -152,9 +148,9 @@ function initClashRoyaleApp() {
       return;
     }
 
-    stopRequested = false;
     isRunning = true;
-    goBtn.textContent = 'Stop';
+    goBtn.textContent = 'Loading...';
+    goBtn.disabled = true;
 
     try {
       if (key) {
@@ -183,8 +179,6 @@ function initClashRoyaleApp() {
       const batchSize = 20;
 
       for (let i = 0; i < tags.length; i += batchSize) {
-        if (stopRequested) break;
-
         try {
           if (key) {
             localStorage.setItem('clashRoyaleApiKey', key);
@@ -231,8 +225,8 @@ function initClashRoyaleApp() {
       console.error('Error fetching clan members on Go:', err);
     } finally {
       isRunning = false;
-      stopRequested = false;
       goBtn.textContent = 'Go';
+      goBtn.disabled = false;
     }
   });
 }
