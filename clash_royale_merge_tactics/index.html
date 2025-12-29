@@ -10,7 +10,7 @@
 <body>
   <div class="controls">
     <label class="field-label" for="apiKey">
-      API Key:
+      API Key (optional):
       <input type="text" id="apiKey" class="field-input" />
     </label>
 
@@ -21,6 +21,10 @@
 
     <button id="goBtn" class="primary-action">Go</button>
   </div>
+
+  <p class="hint">
+    Provide your clan tag, fetch members, then load player details in batches. API key is only needed for other clans.
+  </p>
 
   <div id="grid" class="grid-area"></div>
 </body>

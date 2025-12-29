@@ -14,11 +14,21 @@ function getMergeTactics(player) {
   return null;
 }
 
+function normalizeTag(tag) {
+  if (!tag) return '';
+  const trimmed = tag.trim();
+  return trimmed.startsWith('#') ? trimmed : ('#' + trimmed);
+}
+
+function buildAuthHeaders(key) {
+  return key ? { Authorization: 'Bearer ' + key } : {};
+}
+
 async function fetchClanMembers({ key, clanTag }) {
-  const encodedTag = encodeURIComponent(clanTag.startsWith('#') ? clanTag : ('#' + clanTag));
+  const encodedTag = encodeURIComponent(normalizeTag(clanTag));
 
   const res = await fetch(`${WORKER_BASE}/clans/${encodedTag}/members`, {
-    headers: { 'Authorization': 'Bearer ' + key }
+    headers: buildAuthHeaders(key)
   });
 
   if (!res.ok) {
@@ -30,11 +40,13 @@ async function fetchClanMembers({ key, clanTag }) {
   return Array.isArray(data?.items) ? data.items : [];
 }
 
-async function fetchPlayer({ key, playerTag }) {
-  const encodedTag = encodeURIComponent(playerTag.startsWith('#') ? playerTag : ('#' + playerTag));
+async function fetchPlayersBatch({ key, playerTags }) {
+  const encodedTags = playerTags
+    .map(tag => encodeURIComponent(normalizeTag(tag)))
+    .join(',');
 
-  const res = await fetch(`${WORKER_BASE}/players/${encodedTag}`, {
-    headers: { 'Authorization': 'Bearer ' + key }
+  const res = await fetch(`${WORKER_BASE}/players?tags=${encodedTags}`, {
+    headers: buildAuthHeaders(key)
   });
 
   if (!res.ok) {
@@ -42,7 +54,8 @@ async function fetchPlayer({ key, playerTag }) {
     throw new Error(`HTTP ${res.status} ${res.statusText} ${text}`);
   }
 
-  return await res.json();
+  const data = await res.json();
+  return Array.isArray(data?.items) ? data.items : [];
 }
 
 function applyDefaultSortMergeTacticsDesc(gridApi) {
@@ -134,10 +147,6 @@ function initClashRoyaleApp() {
     const key = apiKeyInput.value.trim();
     const clanTag = clanTagInput.value.trim();
 
-    if (!key) {
-      console.error('No API key provided');
-      return;
-    }
     if (!clanTag) {
       console.error('No clan tag provided');
       return;
@@ -148,7 +157,11 @@ function initClashRoyaleApp() {
     goBtn.textContent = 'Stop';
 
     try {
-      localStorage.setItem('clashRoyaleApiKey', key);
+      if (key) {
+        localStorage.setItem('clashRoyaleApiKey', key);
+      } else {
+        localStorage.removeItem('clashRoyaleApiKey');
+      }
 
       const members = await fetchClanMembers({ key, clanTag });
 
@@ -166,34 +179,50 @@ function initClashRoyaleApp() {
 
       applyDefaultSortMergeTacticsDesc(gridApi);
 
-      for (const m of members) {
+      const tags = members.map(m => m.tag);
+      const batchSize = 20;
+
+      for (let i = 0; i < tags.length; i += batchSize) {
         if (stopRequested) break;
 
         try {
-          localStorage.setItem('clashRoyaleApiKey', key);
+          if (key) {
+            localStorage.setItem('clashRoyaleApiKey', key);
+          }
 
-          const player = await fetchPlayer({ key, playerTag: m.tag });
-          const trophyRoad = Number.isFinite(player?.trophies) ? player.trophies : null;
-          const mergeTactics = getMergeTactics(player);
+          const batch = tags.slice(i, i + batchSize);
+          const players = await fetchPlayersBatch({ key, playerTags: batch });
 
-          console.log({
-            name: m.name,
-            tag: m.tag,
-            trophyRoad,
-            mergeTactics
-          });
+          for (const player of players) {
+            const tag = player?.tag;
+            const trophyRoad = Number.isFinite(player?.trophyRoad)
+              ? player.trophyRoad
+              : Number.isFinite(player?.trophies)
+                ? player.trophies
+                : null;
+            const mergeTactics = Number.isFinite(player?.mergeTactics)
+              ? player.mergeTactics
+              : getMergeTactics(player);
 
-          const node = gridApi.getRowNode(m.tag);
-          if (node) {
-            node.setData({
-              ...node.data,
+            console.log({
+              name: player?.name,
+              tag,
               trophyRoad,
               mergeTactics
             });
-            reapplySortIfNeeded();
+
+            const node = gridApi.getRowNode(tag);
+            if (node) {
+              node.setData({
+                ...node.data,
+                trophyRoad,
+                mergeTactics
+              });
+              reapplySortIfNeeded();
+            }
           }
         } catch (e) {
-          console.error('Error fetching player info for', m.tag, e);
+          console.error('Error fetching player info batch', e);
         }
 
         await sleep(200);
