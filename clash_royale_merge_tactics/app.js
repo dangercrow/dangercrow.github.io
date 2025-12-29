@@ -180,7 +180,7 @@ function initClashRoyaleApp() {
       applyDefaultSortMergeTacticsDesc(gridApi);
 
       const tags = members.map(m => m.tag);
-      const batchSize = 20;
+      const batchSize = 50;
 
       for (let i = 0; i < tags.length; i += batchSize) {
         if (stopRequested) break;
