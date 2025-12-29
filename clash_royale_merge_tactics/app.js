@@ -1,4 +1,4 @@
-const WORKER_BASE = 'https://curly-cell-5728.dangercrow-cloudflare.workers.dev';
+const WORKER_BASE = 'https://odd-mud-6ea5.dangercrow-cloudflare.workers.dev/';
 
 function getMergeTactics(player) {
   const progress = player?.progress;
