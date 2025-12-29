@@ -93,6 +93,7 @@ function initClashRoyaleApp() {
 
   if (!apiKeyInput || !clanTagInput || !goBtn || !gridDiv) return;
 
+  const defaultGoLabel = goBtn.textContent || 'Go';
   let isRunning = false;
 
   const savedKey = localStorage.getItem('clashRoyaleApiKey');
@@ -225,7 +226,7 @@ function initClashRoyaleApp() {
       console.error('Error fetching clan members on Go:', err);
     } finally {
       isRunning = false;
-      goBtn.textContent = 'Go';
+      goBtn.textContent = defaultGoLabel;
       goBtn.disabled = false;
     }
   });

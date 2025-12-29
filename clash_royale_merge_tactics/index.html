@@ -2,30 +2,51 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Clash Royale – Merge Tactics ranking</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community/styles/ag-grid.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community/styles/ag-theme-quartz-dark.css" />
   <link rel="stylesheet" href="styles.css" />
-  <script src="https://cdn.jsdelivr.net/npm/ag-grid-community/dist/ag-grid-community.min.js"></script>
-  <script src="app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/ag-grid-community/dist/ag-grid-community.min.js" defer></script>
+  <script src="app.js" defer></script>
 </head>
 <body>
-  <div class="controls">
-    <label class="field-label" for="apiKey">
-      API Key (optional):
-      <input type="text" id="apiKey" class="field-input" />
-    </label>
+  <main class="page">
+    <header class="page-header">
+      <h1 class="page-title">Merge Tactics ranking</h1>
+      <p class="page-description">
+        Fetch clan members and compare their Merge Tactics trophies using the Clash Royale API.
+      </p>
+    </header>
 
-    <label class="field-label" for="clanTag">
-      Clan Tag:
-      <input type="text" id="clanTag" class="field-input" value="#8QRJLC8R" />
-    </label>
+    <section class="panel">
+      <div class="panel-header">
+        <h2 class="section-title">Lookup</h2>
+        <p class="section-description">
+          Provide your clan tag and optional API key to load player details in batches.
+        </p>
+      </div>
 
-    <button id="goBtn" class="primary-action">Go</button>
-  </div>
+      <div class="controls">
+        <label class="field-label" for="apiKey">
+          API Key (optional)
+          <input type="text" id="apiKey" class="field-input" autocomplete="off" />
+        </label>
 
-  <p class="hint">
-    Provide your clan tag, fetch members, then load player details in batches. API key is only needed for other clans.
-  </p>
+        <label class="field-label" for="clanTag">
+          Clan Tag
+          <input type="text" id="clanTag" class="field-input" value="#8QRJLC8R" />
+        </label>
 
-  <div id="grid" class="grid-area"></div>
+        <button id="goBtn" class="primary-action" type="button">Load clan</button>
+      </div>
+
+      <p class="hint">
+        The public endpoint works for your own clan. Include an API key to query other clans and to refresh player data.
+      </p>
+
+      <div id="grid" class="grid-area ag-theme-quartz-dark"></div>
+    </section>
+  </main>
 </body>
 </html>
