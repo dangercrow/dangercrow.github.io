@@ -45,7 +45,8 @@ async function fetchPlayer({ key, playerTag }) {
   return await res.json();
 }
 
-function applyDefaultSortMergeTacticsDesc() {
+function applyDefaultSortMergeTacticsDesc(gridApi) {
+  if (!gridApi) return;
   if (typeof gridApi.applyColumnState === 'function') {
     gridApi.applyColumnState({
       state: [{ colId: 'mergeTactics', sort: 'desc' }],
@@ -163,7 +164,7 @@ function initClashRoyaleApp() {
         gridApi.setRowData(rows);
       }
 
-      applyDefaultSortMergeTacticsDesc();
+      applyDefaultSortMergeTacticsDesc(gridApi);
 
       for (const m of members) {
         if (stopRequested) break;
