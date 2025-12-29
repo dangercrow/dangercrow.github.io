@@ -44,3 +44,9 @@ body {
 .grid-area {
   flex: 1;
 }
+
+.hint {
+  margin: 0 8px 12px;
+  color: #cbd5e1;
+  font-size: 13px;
+}
