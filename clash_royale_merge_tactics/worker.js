@@ -1,5 +1,5 @@
 export default {
-  async fetch(request, env, ctx) {
+  async fetch(request, env) {
     const url = new URL(request.url);
 
     // CORS preflight
@@ -21,7 +21,7 @@ export default {
       }
 
       if (url.pathname === "/players") {
-        const resp = await handlePlayersBatch(request, env, ctx);
+        const resp = await handlePlayersBatch(request, env);
         return withCors(resp);
       }
 
@@ -106,7 +106,7 @@ async function handleClanMembers(request, env, clanTagParam) {
   return fetch(upstreamUrl, { headers: { Authorization: auth } });
 }
 
-async function handlePlayersBatch(request, env, ctx) {
+async function handlePlayersBatch(request, env) {
   const url = new URL(request.url);
   const { auth, usingDefault } = getAuthOrDefault(request, env);
   const myClanTag = myClan(env);
@@ -115,77 +115,47 @@ async function handlePlayersBatch(request, env, ctx) {
   const csv = url.searchParams.get("tags");
   if (!csv) return new Response("Provide tags via ?tags=tag1,tag2,...", { status: 400 });
 
-  // Normalize once
-  const tags = csv
-    .split(",")
-    .map(s => normalizeTag(s)) // input should already be decoded by URLSearchParams
+  let tags = csv.split(",")
+    .map(s => normalizeTag(decodeURIComponent(s)))
     .filter(Boolean);
 
   if (tags.length === 0) return new Response("No valid tags in ?tags=", { status: 400 });
   if (tags.length > 50) return new Response("Max 50 tags per request", { status: 400 });
 
-  const cache = caches.default;
-  const ttlSeconds = 300;
-
   const results = [];
 
+  // Sequential fetch keeps things simple and avoids connection fanout.
+  // Still within Free plan subrequest cap: N players => N subrequests.
   for (const tag of tags) {
-    // Projection cache key: small derived data (cheap to parse)
-    const projKey = new Request(`https://cache.local/player/${encodeTag(tag)}`, { method: "GET" });
-
-    // 1) Cache hit?
-    const cached = await cache.match(projKey);
-    if (cached) {
-      const item = await cached.json(); // small JSON
-      if (usingDefault && (!item.clanTag || !sameTag(item.clanTag, myClanTag))) {
-        return new Response("Default key restricted to MY_CLAN_TAG", { status: 403 });
-      }
-      results.push(item);
-      continue;
-    }
-
-    // 2) Cache miss -> fetch upstream
     const upstreamUrl = `${UPSTREAM_BASE}/players/${encodeTag(tag)}`;
     const res = await fetch(upstreamUrl, { headers: { Authorization: auth } });
 
     if (!res.ok) {
+      // Upstream error -> fail whole request (consistent with your “fail whole request” stance)
       const text = await res.text().catch(() => "");
       return new Response(`Upstream error for ${tag}: HTTP ${res.status} ${text}`, { status: 502 });
     }
 
-    const player = await res.json(); // expensive parse (only on miss)
+    const player = await res.json();
 
-    const item = {
+    // Default-key restriction: every player must be in your clan
+    if (usingDefault) {
+      const playerClan = player?.clan?.tag;
+      if (!playerClan || !sameTag(playerClan, myClanTag)) {
+        return new Response("Default key restricted to MY_CLAN_TAG", { status: 403 });
+      }
+    }
+
+    results.push({
       tag,
       name: player?.name ?? null,
       trophyRoad: Number.isFinite(player?.trophies) ? player.trophies : null,
       mergeTactics: extractAutoChessTrophies(player),
-      clanTag: player?.clan?.tag ?? null,
-    };
-
-    if (usingDefault && (!item.clanTag || !sameTag(item.clanTag, myClanTag))) {
-      return new Response("Default key restricted to MY_CLAN_TAG", { status: 403 });
-    }
-
-    // Cache the small projection (async)
-    const toCache = new Response(JSON.stringify(item), {
-      status: 200,
-      headers: {
-        "Content-Type": "application/json",
-        "Cache-Control": `public, max-age=${ttlSeconds}`,
-      },
     });
-    ctx.waitUntil(cache.put(projKey, toCache.clone()));
-
-    results.push(item);
   }
 
-  // Optional: let clients cache this combined response briefly too
   return new Response(JSON.stringify({ items: results }), {
     status: 200,
-    headers: {
-      "Content-Type": "application/json",
-      "Cache-Control": "public, max-age=30",
-    },
+    headers: { "Content-Type": "application/json" },
   });
 }
