@@ -100,6 +100,7 @@ function initClashRoyaleApp() {
   if (savedKey) apiKeyInput.value = savedKey;
 
   const gridOptions = {
+    theme: 'legacy',
     columnDefs: [
       { headerName: 'Player', field: 'name', flex: 2 },
       { headerName: 'Tag', field: 'tag', flex: 1 },
