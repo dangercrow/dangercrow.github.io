@@ -100,11 +100,24 @@ function initClashRoyaleApp() {
   if (savedKey) apiKeyInput.value = savedKey;
 
   const gridOptions = {
+    theme: 'legacy',
     columnDefs: [
       { headerName: 'Player', field: 'name', flex: 2 },
       { headerName: 'Tag', field: 'tag', flex: 1 },
-      { headerName: 'Trophy Road', field: 'trophyRoad', flex: 1, valueFormatter: p => p.value ?? '—' },
-      { headerName: 'Merge Tactics', field: 'mergeTactics', flex: 1, valueFormatter: p => p.value ?? '—' }
+      {
+        headerName: 'Trophy Road',
+        field: 'trophyRoad',
+        flex: 1,
+        valueFormatter: p => p.value ?? '—',
+        cellClass: 'cell-number'
+      },
+      {
+        headerName: 'Merge Tactics',
+        field: 'mergeTactics',
+        flex: 1,
+        valueFormatter: p => p.value ?? '—',
+        cellClass: 'cell-number'
+      }
     ],
     rowData: [],
     defaultColDef: { sortable: true, filter: true, resizable: true },
