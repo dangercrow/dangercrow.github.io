@@ -1,5 +1,5 @@
 const WORKER_BASE = 'https://odd-mud-6ea5.dangercrow-cloudflare.workers.dev';
-const BATCH_SIZE = 50;
+const BATCH_SIZE = 1;
 
 function getMergeTactics(player) {
   const progress = player?.progress;
