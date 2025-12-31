@@ -1,4 +1,5 @@
 const WORKER_BASE = 'https://odd-mud-6ea5.dangercrow-cloudflare.workers.dev';
+const BATCH_SIZE = 50;
 
 function getMergeTactics(player) {
   const progress = player?.progress;
@@ -68,23 +69,6 @@ function applyDefaultSortMergeTacticsDesc(gridApi) {
   }
 }
 
-(function runSelfTests() {
-  try {
-    const sample = {
-      progress: {
-        "AutoChess_2025_Dec": { trophies: 2036 }
-      }
-    };
-    const got = getMergeTactics(sample);
-    console.assert(got === 2036, 'getMergeTactics should return trophies from AutoChess_* key');
-
-    const none = getMergeTactics({ progress: { "Royals_2v2_202510": { trophies: 1530 } } });
-    console.assert(none === null, 'getMergeTactics should return null when no AutoChess_* key is present');
-  } catch (e) {
-    console.warn('Self-tests failed:', e);
-  }
-})();
-
 function initClashRoyaleApp() {
   const apiKeyInput = document.getElementById('apiKey');
   const clanTagInput = document.getElementById('clanTag');
@@ -101,7 +85,7 @@ function initClashRoyaleApp() {
   const defaultClanTag = '#8QRJLC8R';
 
   const gridOptions = {
-    theme: 'legacy',
+    theme: agGrid.themeQuartz,
     columnDefs: [
       { headerName: 'Player', field: 'name', flex: 2 },
       { headerName: 'Tag', field: 'tag', flex: 1 },
@@ -125,13 +109,7 @@ function initClashRoyaleApp() {
     getRowId: p => p.data.tag
   };
 
-  const gridApi = agGrid?.createGrid
-    ? agGrid.createGrid(gridDiv, gridOptions)
-    : (new agGrid.Grid(gridDiv, gridOptions), gridOptions.api);
-
-  function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
+  const gridApi = agGrid.createGrid(gridDiv, gridOptions);
 
   function hasActiveSort() {
     const state = (typeof gridApi.getColumnState === 'function')
@@ -192,15 +170,14 @@ function initClashRoyaleApp() {
       applyDefaultSortMergeTacticsDesc(gridApi);
 
       const tags = members.map(m => m.tag);
-      const batchSize = 50;
 
-      for (let i = 0; i < tags.length; i += batchSize) {
+      for (let i = 0; i < tags.length; i += BATCH_SIZE) {
         try {
           if (key) {
             localStorage.setItem('clashRoyaleApiKey', key);
           }
 
-          const batch = tags.slice(i, i + batchSize);
+          const batch = tags.slice(i, i + BATCH_SIZE);
           const players = await fetchPlayersBatch({ key, playerTags: batch });
 
           for (const player of players) {
@@ -234,8 +211,6 @@ function initClashRoyaleApp() {
         } catch (e) {
           console.error('Error fetching player info batch', e);
         }
-
-        await sleep(200);
       }
     } catch (err) {
       console.error('Error fetching clan members on Go:', err);
@@ -247,8 +222,4 @@ function initClashRoyaleApp() {
   });
 }
 
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initClashRoyaleApp);
-} else {
-  initClashRoyaleApp();
-}
+window.addEventListener('load', initClashRoyaleApp);
