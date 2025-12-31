@@ -84,8 +84,12 @@ function initClashRoyaleApp() {
   if (savedKey) apiKeyInput.value = savedKey;
   const defaultClanTag = '#8QRJLC8R';
 
+  const darkMode = window.matchMedia('(prefers-color-scheme: dark)');
+  const baseTheme = agGrid.themeQuartz;
+  const theme = darkMode ? baseTheme.withPart(agGrid.colorSchemeDarkBlue) : baseTheme;
+
   const gridOptions = {
-    theme: agGrid.themeQuartz,
+    theme: theme,
     columnDefs: [
       { headerName: 'Player', field: 'name', flex: 2 },
       { headerName: 'Tag', field: 'tag', flex: 1 },
