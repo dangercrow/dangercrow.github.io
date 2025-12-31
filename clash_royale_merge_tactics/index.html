@@ -20,30 +20,19 @@
     </header>
 
     <section class="panel">
-      <div class="panel-header">
-        <h2 class="section-title">Lookup</h2>
-        <p class="section-description">
-          Provide your clan tag and optional API key to load player details in batches.
-        </p>
-      </div>
-
       <div class="controls">
         <label class="field-label" for="apiKey">
-          API Key (optional)
-          <input type="text" id="apiKey" class="field-input" autocomplete="off" />
+          API Key
+          <input type="text" id="apiKey" class="field-input" autocomplete="off" placeholder="Optional unless using a custom clan" />
         </label>
 
         <label class="field-label" for="clanTag">
           Clan Tag
-          <input type="text" id="clanTag" class="field-input" value="#8QRJLC8R" />
+          <input type="text" id="clanTag" class="field-input" placeholder="#8QRJLC8R" />
         </label>
 
         <button id="goBtn" class="primary-action" type="button">Load clan</button>
       </div>
-
-      <p class="hint">
-        The public endpoint works for your own clan. Include an API key to query other clans and to refresh player data.
-      </p>
 
       <div id="grid" class="grid-area ag-theme-quartz-dark"></div>
     </section>

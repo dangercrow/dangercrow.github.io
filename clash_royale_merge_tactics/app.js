@@ -98,6 +98,7 @@ function initClashRoyaleApp() {
 
   const savedKey = localStorage.getItem('clashRoyaleApiKey');
   if (savedKey) apiKeyInput.value = savedKey;
+  const defaultClanTag = '#8QRJLC8R';
 
   const gridOptions = {
     theme: 'legacy',
@@ -155,7 +156,8 @@ function initClashRoyaleApp() {
     if (isRunning) return;
 
     const key = apiKeyInput.value.trim();
-    const clanTag = clanTagInput.value.trim();
+    const rawTag = clanTagInput.value.trim();
+    const clanTag = rawTag || defaultClanTag;
 
     if (!clanTag) {
       console.error('No clan tag provided');

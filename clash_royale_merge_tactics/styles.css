@@ -166,10 +166,17 @@ body {
   width: 100%;
   flex: 1;
   min-height: 480px;
+  height: 100%;
   border: 1px solid var(--border);
   border-radius: var(--radius-12);
   overflow: hidden;
   background: var(--surface);
+}
+
+.ag-theme-quartz-dark,
+.ag-theme-quartz-dark .ag-root-wrapper,
+.ag-theme-quartz-dark .ag-root-wrapper-body {
+  height: 100%;
 }
 
 .ag-theme-quartz-dark {
