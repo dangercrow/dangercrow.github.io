@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Octopus Agile EV Charging Optimiser</title>
+<style>
+body { font-family: Arial, sans-serif; margin: 20px; }
+label { display: block; margin-top: 8px; }
+input { width: 220px; }
+button { margin-top: 10px; }
+details { margin-top: 20px; }
+canvas { border: 1px solid #ccc; width: 100%; height: 280px; }
+table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+th, td { border: 1px solid #ccc; padding: 6px; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<h2>Octopus Agile EV Charging Optimiser</h2>
+
+<label>Charger Power (kW): <input id="chargerPower" type="number" value="7" step="0.1"></label>
+<label>Battery Size (kWh): <input id="batterySize" type="number" value="52"></label>
+<label>Start %: <input id="startPct" type="number" value="28"></label>
+<label>Target %: <input id="targetPct" type="number" value="100"></label>
+<label>Max Contiguous Runs: <input id="maxRuns" type="number" value="4"></label>
+
+<details>
+  <summary>Tapering (Linear)</summary>
+  <label>Peak Power Accepted (kW): <input id="peakPower" type="number" value="46"></label>
+  <label>Power at 100% (kW): <input id="endPower" type="number" value="2"></label>
+  <label>Taper Threshold %: <input id="taperThresh" type="number" value="80"></label>
+</details>
+
+<button id="runBtn">Run Optimisation</button>
+
+<div id="scheduleTable"></div>
+
+<details>
+  <summary>Show Price & SoC Chart</summary>
+  <canvas height="400px" id="priceChart"></canvas>
+</details>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+'use strict';
+
+const PRODUCT = 'AGILE-23-12-06';
+const TARIFF = 'E-1R-AGILE-23-12-06-C';
+let chartInstance = null;
+
+function isoNow() {
+  return new Date().toISOString().split('.')[0] + '.000Z';
+}
+
+function tomorrowAt4pmISO() {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  d.setHours(16, 0, 0, 0);
+  return d.toISOString().split('.')[0] + '.000Z';
+}
+
+async function fetchAgileRates() {
+  const url = `https://api.octopus.energy/v1/products/${PRODUCT}/electricity-tariffs/${TARIFF}/standard-unit-rates/?period_from=${isoNow()}&period_to=${tomorrowAt4pmISO()}&page_size=1500`;
+  const res = await fetch(url);
+  const data = await res.json();
+  return data.results.map(r => ({
+    start: new Date(r.valid_from),
+    end: new Date(r.valid_to),
+    price: r.value_inc_vat
+  })).reverse();
+}
+
+function effectivePower(soc, chargerPower, peakPower, endPower, taperStart) {
+  if (soc < taperStart) return Math.min(chargerPower, peakPower);
+  const frac = (soc - taperStart) / (1 - taperStart);
+  const accepted = peakPower + frac * (endPower - peakPower);
+  return Math.min(chargerPower, Math.max(endPower, accepted));
+}
+
+function optimise(slots, params) {
+  const { energyReq, maxRuns, chargerPower, peakPower, endPower, taperStart } = params;
+  const slotHours = 0.5;
+  const maxSlots = Math.ceil(energyReq / (chargerPower * slotHours));
+  const T = slots.length;
+  const INF = 1e12;
+
+  const dp = Array.from({ length: T + 1 }, () =>
+    Array.from({ length: maxSlots + 1 }, () =>
+      Array.from({ length: maxRuns + 1 }, () => [INF, INF])
+    )
+  );
+  const parent = {};
+  dp[0][0][0][0] = 0;
+
+  function set(t, n, k, c, cost, prev) {
+    if (cost < dp[t][n][k][c]) {
+      dp[t][n][k][c] = cost;
+      parent[`${t}|${n}|${k}|${c}`] = prev;
+    }
+  }
+
+  for (let t = 0; t < T; t++) {
+    for (let n = 0; n <= maxSlots; n++) {
+      for (let k = 0; k <= maxRuns; k++) {
+        for (let c = 0; c < 2; c++) {
+          const base = dp[t][n][k][c];
+          if (base >= INF) continue;
+
+          set(t + 1, n, k, 0, base, { t, n, k, c, action: 'idle' });
+
+          if (n < maxSlots) {
+            const soc = n / maxSlots;
+            const pwr = effectivePower(soc, chargerPower, peakPower, endPower, taperStart);
+            const costAdd = pwr * slotHours * slots[t].price;
+            if (c === 1) {
+              set(t + 1, n + 1, k, 1, base + costAdd, { t, n, k, c, action: 'cont' });
+            } else if (k < maxRuns) {
+              set(t + 1, n + 1, k + 1, 1, base + costAdd, { t, n, k, c, action: 'start' });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  let best = null;
+  for (let k = 0; k <= maxRuns; k++) {
+    for (let c = 0; c < 2; c++) {
+      const cost = dp[T][maxSlots][k][c];
+      if (cost < INF && (!best || cost < best.cost)) {
+        best = { cost, t: T, n: maxSlots, k, c };
+      }
+    }
+  }
+  if (!best) return null;
+
+  const chosen = [];
+  let cur = best;
+  while (cur.t > 0) {
+    const p = parent[`${cur.t}|${cur.n}|${cur.k}|${cur.c}`];
+    if (!p) break;
+    if (p.action !== 'idle') chosen.push(cur.t - 1);
+    cur = p;
+  }
+
+  return chosen.reverse();
+}
+
+function summarise(slots, chosen, socData) {
+  if (!chosen.length) return [];
+  const groups = [];
+  let start = chosen[0];
+  for (let i = 1; i <= chosen.length; i++) {
+    if (i === chosen.length || chosen[i] !== chosen[i - 1] + 1) {
+      const end = chosen[i - 1];
+      const dur = (end - start + 1) * 0.5;
+      const avg = slots.slice(start, end + 1).reduce((a, b) => a + b.price, 0) / (end - start + 1);
+      const energy = dur * socData.powerSeries.slice(start, end + 1)
+        .reduce((a, b) => a + b, 0) / (end - start + 1);
+      groups.push({
+        start: slots[start].start,
+        end: slots[end].end,
+        dur,
+        avg,
+        energy,
+        avgPower: energy / dur
+      });
+      start = chosen[i];
+    }
+  }
+  return groups;
+}
+
+function computeSocData(slots, chosen, bs, sp, chargerPower, peakPower, endPower, taperStart) {
+  const slotHours = 0.5;
+  let soc = sp;
+  let energy = bs * sp;
+  const socStart = [];
+  const socEnd = [];
+  const powerSeries = [];
+
+  for (let i = 0; i < slots.length; i++) {
+    socStart.push(soc * 100);
+    let pwr = 0;
+    if (chosen.includes(i)) {
+      pwr = effectivePower(soc, chargerPower, peakPower, endPower, taperStart);
+      energy += pwr * slotHours;
+      soc = Math.min(energy / bs, 1);
+    }
+    socEnd.push(soc * 100);
+    powerSeries.push(pwr);
+  }
+  return { socStart, socEnd, powerSeries };
+}
+
+function drawChart(slots, chosen, socData) {
+  if (chartInstance) chartInstance.destroy();
+  const ctx = document.getElementById('priceChart');
+
+  chartInstance = new Chart(ctx, {
+    data: {
+      labels: slots.map(s => s.start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })),
+      datasets: [
+        {
+          type: 'line',
+          label: 'SoC start (%)',
+          data: socData.socStart,
+          borderColor: '#1976d2',
+          pointRadius: 0,
+          yAxisID: 'ySoc'
+        },
+        {
+          type: 'line',
+          label: 'SoC end (%)',
+          data: socData.socEnd,
+          borderColor: '#90caf9',
+          pointRadius: 0,
+          yAxisID: 'ySoc'
+        },
+        {
+          type: 'bar',
+          label: 'Price (p/kWh)',
+          data: slots.map(s => s.price),
+          backgroundColor: slots.map((_, i) => chosen.includes(i) ? '#4caf50' : '#ddd'),
+          yAxisID: 'yPrice'
+        },
+      ]
+    },
+    options: {
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        tooltip: {
+          callbacks: {
+            afterBody: items => {
+              const i = items[0].dataIndex;
+              return `Charging power: ${socData.powerSeries[i].toFixed(2)} kW`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: { display: false },
+        yPrice: {
+          position: 'left',
+          title: { display: true, text: 'Price (p/kWh)' }
+        },
+        ySoc: {
+          position: 'right',
+          min: 0,
+          max: 100,
+          grid: { drawOnChartArea: false },
+          title: { display: true, text: 'State of Charge (%)' }
+        }
+      }
+    }
+  });
+}
+
+async function runSchedule() {
+  const slots = await fetchAgileRates();
+
+  const chargerPower = +document.getElementById('chargerPower').value;
+  const bs = +document.getElementById('batterySize').value;
+  const sp = +document.getElementById('startPct').value / 100;
+  const tp = +document.getElementById('targetPct').value / 100;
+  const maxRuns = +document.getElementById('maxRuns').value;
+  const peak = +document.getElementById('peakPower').value;
+  const endP = +document.getElementById('endPower').value;
+  const taperStart = +document.getElementById('taperThresh').value / 100;
+
+  const energyReq = bs * (tp - sp);
+  const chosen = optimise(slots, {
+    energyReq,
+    maxRuns,
+    chargerPower,
+    peakPower: peak,
+    endPower: endP,
+    taperStart
+  });
+
+  if (!chosen) {
+    document.getElementById('scheduleTable').innerText = 'No feasible schedule';
+    return;
+  }
+
+  const socData = computeSocData(slots, chosen, bs, sp, chargerPower, peak, endP, taperStart);
+  drawChart(slots, chosen, socData);
+
+  const rows = summarise(slots, chosen, socData);
+  let html = '<table><tr><th>Slot Start</th><th>Slot Stop</th><th>Duration (h)</th><th>Energy Added (kWh)</th><th>Avg Power (kW)</th><th>Avg Price</th></tr>';
+  rows.forEach(r => {
+    html += `<tr><td>${r.start.toLocaleString()}</td><td>${r.end.toLocaleString()}</td><td>${r.dur.toFixed(2)}</td><td>${r.energy.toFixed(2)}</td><td>${r.avgPower.toFixed(2)}</td><td>${r.avg.toFixed(2)}</td></tr>`;
+  });
+  html += '</table>';
+  document.getElementById('scheduleTable').innerHTML = html;
+}
+
+// Bind after definition to guarantee availability
+
+document.getElementById('runBtn').addEventListener('click', runSchedule);
+
+// Basic sanity tests
+console.assert(typeof runSchedule === 'function', 'runSchedule should be defined');
+console.assert(effectivePower(0.5, 7, 46, 2, 0.8) <= 7, 'Effective power must not exceed charger power');
+
+</script>
+</body>
+</html>
