@@ -1,308 +1,703 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<title>Octopus Agile EV Charging Optimiser</title>
-<style>
-body { font-family: Arial, sans-serif; margin: 20px; }
-label { display: block; margin-top: 8px; }
-input { width: 220px; }
-button { margin-top: 10px; }
-details { margin-top: 20px; }
-canvas { border: 1px solid #ccc; width: 100%; height: 280px; }
-table { border-collapse: collapse; width: 100%; margin-top: 10px; }
-th, td { border: 1px solid #ccc; padding: 6px; font-size: 12px; }
-</style>
-</head>
-<body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Octopus Agile EV Charging Optimiser</title>
+    <style>
+      :root {
+        --page-bg: #0b1020;
+        --surface: #111827;
+        --surface-alt: #0f172a;
+        --border: #1f2937;
+        --text: #e5e7eb;
+        --muted: #9ca3af;
+        --accent: #3b82f6;
+        --accent-strong: #2563eb;
+        --focus: #22d3ee;
+        --radius-md: 12px;
+        --space-1: 4px;
+        --space-2: 8px;
+        --space-3: 16px;
+        --space-4: 24px;
+        --space-5: 32px;
+        --space-6: 48px;
+      }
 
-<h2>Octopus Agile EV Charging Optimiser</h2>
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
 
-<label>Charger Power (kW): <input id="chargerPower" type="number" value="7" step="0.1"></label>
-<label>Battery Size (kWh): <input id="batterySize" type="number" value="52"></label>
-<label>Start %: <input id="startPct" type="number" value="28"></label>
-<label>Target %: <input id="targetPct" type="number" value="100"></label>
-<label>Max Contiguous Runs: <input id="maxRuns" type="number" value="4"></label>
+      body {
+        margin: 0;
+        background: var(--page-bg);
+        color: var(--text);
+        font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        line-height: 1.6;
+      }
 
-<details>
-  <summary>Tapering (Linear)</summary>
-  <label>Peak Power Accepted (kW): <input id="peakPower" type="number" value="46"></label>
-  <label>Power at 100% (kW): <input id="endPower" type="number" value="2"></label>
-  <label>Taper Threshold %: <input id="taperThresh" type="number" value="80"></label>
-</details>
+      button,
+      input {
+        font: inherit;
+      }
 
-<button id="runBtn">Run Optimisation</button>
+      .page {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: var(--space-6) var(--space-3);
+      }
 
-<div id="scheduleTable"></div>
+      .page-header {
+        display: grid;
+        gap: var(--space-2);
+        margin-bottom: var(--space-4);
+      }
 
-<details>
-  <summary>Show Price & SoC Chart</summary>
-  <canvas height="400px" id="priceChart"></canvas>
-</details>
+      .page-header h1 {
+        margin: 0;
+        font-size: clamp(28px, 3vw, 36px);
+        letter-spacing: -0.02em;
+      }
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script>
-'use strict';
+      .page-header p,
+      .lede,
+      .meta,
+      .empty-state {
+        margin: 0;
+        color: var(--muted);
+      }
 
-const PRODUCT = 'AGILE-23-12-06';
-const TARIFF = 'E-1R-AGILE-23-12-06-C';
-let chartInstance = null;
+      .layout {
+        display: grid;
+        gap: var(--space-3);
+      }
 
-function isoNow() {
-  return new Date().toISOString().split('.')[0] + '.000Z';
-}
+      .panel {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        padding: var(--space-3);
+      }
 
-function tomorrowAt4pmISO() {
-  const d = new Date();
-  d.setDate(d.getDate() + 1);
-  d.setHours(16, 0, 0, 0);
-  return d.toISOString().split('.')[0] + '.000Z';
-}
+      .panel-header {
+        display: grid;
+        gap: var(--space-1);
+        margin-bottom: var(--space-3);
+      }
 
-async function fetchAgileRates() {
-  const url = `https://api.octopus.energy/v1/products/${PRODUCT}/electricity-tariffs/${TARIFF}/standard-unit-rates/?period_from=${isoNow()}&period_to=${tomorrowAt4pmISO()}&page_size=1500`;
-  const res = await fetch(url);
-  const data = await res.json();
-  return data.results.map(r => ({
-    start: new Date(r.valid_from),
-    end: new Date(r.valid_to),
-    price: r.value_inc_vat
-  })).reverse();
-}
+      .panel-header h2 {
+        margin: 0;
+        font-size: 1.1rem;
+        letter-spacing: -0.01em;
+      }
 
-function effectivePower(soc, chargerPower, peakPower, endPower, taperStart) {
-  if (soc < taperStart) return Math.min(chargerPower, peakPower);
-  const frac = (soc - taperStart) / (1 - taperStart);
-  const accepted = peakPower + frac * (endPower - peakPower);
-  return Math.min(chargerPower, Math.max(endPower, accepted));
-}
+      .input-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: var(--space-3);
+      }
 
-function optimise(slots, params) {
-  const { energyReq, maxRuns, chargerPower, peakPower, endPower, taperStart } = params;
-  const slotHours = 0.5;
-  const maxSlots = Math.ceil(energyReq / (chargerPower * slotHours));
-  const T = slots.length;
-  const INF = 1e12;
+      label {
+        display: grid;
+        gap: var(--space-1);
+        color: var(--text);
+        font-size: 0.9rem;
+      }
 
-  const dp = Array.from({ length: T + 1 }, () =>
-    Array.from({ length: maxSlots + 1 }, () =>
-      Array.from({ length: maxRuns + 1 }, () => [INF, INF])
-    )
-  );
-  const parent = {};
-  dp[0][0][0][0] = 0;
+      .label-text {
+        color: var(--text);
+      }
 
-  function set(t, n, k, c, cost, prev) {
-    if (cost < dp[t][n][k][c]) {
-      dp[t][n][k][c] = cost;
-      parent[`${t}|${n}|${k}|${c}`] = prev;
-    }
-  }
+      input {
+        width: 100%;
+        min-height: 42px;
+        border: 1px solid var(--border);
+        border-radius: var(--space-2);
+        padding: var(--space-2) var(--space-3);
+        background: var(--surface-alt);
+        color: var(--text);
+        outline: none;
+      }
 
-  for (let t = 0; t < T; t++) {
-    for (let n = 0; n <= maxSlots; n++) {
-      for (let k = 0; k <= maxRuns; k++) {
-        for (let c = 0; c < 2; c++) {
-          const base = dp[t][n][k][c];
-          if (base >= INF) continue;
+      input:focus-visible,
+      button:focus-visible,
+      summary:focus-visible {
+        border-color: var(--focus);
+        outline: 2px solid var(--focus);
+        outline-offset: 2px;
+      }
 
-          set(t + 1, n, k, 0, base, { t, n, k, c, action: 'idle' });
+      .action-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: var(--space-3);
+        margin-top: var(--space-3);
+      }
 
-          if (n < maxSlots) {
-            const soc = n / maxSlots;
-            const pwr = effectivePower(soc, chargerPower, peakPower, endPower, taperStart);
-            const costAdd = pwr * slotHours * slots[t].price;
-            if (c === 1) {
-              set(t + 1, n + 1, k, 1, base + costAdd, { t, n, k, c, action: 'cont' });
-            } else if (k < maxRuns) {
-              set(t + 1, n + 1, k + 1, 1, base + costAdd, { t, n, k, c, action: 'start' });
+      .button {
+        min-height: 42px;
+        border: 1px solid var(--accent-strong);
+        border-radius: var(--space-2);
+        padding: var(--space-2) var(--space-3);
+        background: var(--accent-strong);
+        color: #eff6ff;
+        cursor: pointer;
+        font-weight: 600;
+      }
+
+      .button:hover:not(:disabled) {
+        background: var(--accent);
+      }
+
+      .button:disabled {
+        cursor: not-allowed;
+        opacity: 0.65;
+      }
+
+      details {
+        border-top: 1px solid var(--border);
+        margin-top: var(--space-3);
+        padding-top: var(--space-3);
+      }
+
+      summary {
+        color: var(--text);
+        cursor: pointer;
+        font-weight: 600;
+      }
+
+      .details-body {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: var(--space-3);
+        margin-top: var(--space-3);
+      }
+
+      .status {
+        min-height: 1.5rem;
+        color: var(--muted);
+      }
+
+      .status[data-state="error"] {
+        border-left: 2px solid var(--focus);
+        padding-left: var(--space-2);
+        color: var(--text);
+      }
+
+      .table-wrap {
+        overflow-x: auto;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        min-width: 720px;
+      }
+
+      th,
+      td {
+        border-bottom: 1px solid var(--border);
+        padding: var(--space-2);
+        text-align: left;
+        font-size: 0.88rem;
+        white-space: nowrap;
+      }
+
+      th {
+        color: var(--muted);
+        font-weight: 600;
+      }
+
+      tbody tr:nth-child(odd) {
+        background: rgba(255, 255, 255, 0.02);
+      }
+
+      .chart-frame {
+        position: relative;
+        height: 320px;
+        min-height: 320px;
+        width: 100%;
+        margin-top: var(--space-3);
+      }
+
+      canvas {
+        display: block;
+        width: 100% !important;
+        height: 320px !important;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--surface-alt);
+      }
+
+      @media (max-width: 640px) {
+        .page {
+          padding: var(--space-5) var(--space-3);
+        }
+
+        .panel {
+          padding: var(--space-3);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="page-header">
+        <h1>Octopus Agile EV Charging Optimiser</h1>
+        <p>Find lower-cost Agile tariff slots for a target EV state of charge.</p>
+      </header>
+
+      <div class="layout">
+        <section class="panel" aria-labelledby="inputs-heading">
+          <div class="panel-header">
+            <h2 id="inputs-heading">Charging inputs</h2>
+            <p class="lede">Enter the charger, battery, and state-of-charge limits. Values use kW, kWh, and percent.</p>
+          </div>
+
+          <div class="input-grid">
+            <label for="chargerPower">
+              <span class="label-text">Charger power (kW)</span>
+              <input id="chargerPower" type="number" value="7" min="0.1" step="0.1" />
+            </label>
+            <label for="batterySize">
+              <span class="label-text">Battery size (kWh)</span>
+              <input id="batterySize" type="number" value="52" min="1" step="0.1" />
+            </label>
+            <label for="startPct">
+              <span class="label-text">Start charge (%)</span>
+              <input id="startPct" type="number" value="28" min="0" max="100" step="1" />
+            </label>
+            <label for="targetPct">
+              <span class="label-text">Target charge (%)</span>
+              <input id="targetPct" type="number" value="100" min="0" max="100" step="1" />
+            </label>
+            <label for="maxRuns">
+              <span class="label-text">Max contiguous runs</span>
+              <input id="maxRuns" type="number" value="4" min="1" step="1" />
+            </label>
+          </div>
+
+          <details>
+            <summary>Tapering model</summary>
+            <div class="details-body">
+              <label for="peakPower">
+                <span class="label-text">Peak accepted power (kW)</span>
+                <input id="peakPower" type="number" value="46" min="0.1" step="0.1" />
+              </label>
+              <label for="endPower">
+                <span class="label-text">Power at 100% (kW)</span>
+                <input id="endPower" type="number" value="2" min="0.1" step="0.1" />
+              </label>
+              <label for="taperThresh">
+                <span class="label-text">Taper threshold (%)</span>
+                <input id="taperThresh" type="number" value="80" min="0" max="99" step="1" />
+              </label>
+            </div>
+          </details>
+
+          <div class="action-row">
+            <button id="runBtn" class="button" type="button">Run optimisation</button>
+            <p id="status" class="status" aria-live="polite">Ready to calculate.</p>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="schedule-heading">
+          <div class="panel-header">
+            <h2 id="schedule-heading">Schedule</h2>
+            <p class="lede">Run the optimisation to generate charging windows.</p>
+          </div>
+          <div id="scheduleTable" class="table-wrap">
+            <p class="empty-state">No schedule calculated.</p>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="chart-heading">
+          <div class="panel-header">
+            <h2 id="chart-heading">Price and state of charge</h2>
+            <p class="lede">The chart updates after each run and keeps a fixed height.</p>
+          </div>
+          <div class="chart-frame">
+            <canvas id="priceChart" aria-label="Price and state-of-charge chart"></canvas>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+      'use strict';
+
+      const PRODUCT = 'AGILE-23-12-06';
+      const TARIFF = 'E-1R-AGILE-23-12-06-C';
+      const CHART_HEIGHT = 320;
+      let chartInstance = null;
+
+      const runButton = document.getElementById('runBtn');
+      const statusEl = document.getElementById('status');
+      const scheduleTable = document.getElementById('scheduleTable');
+      const chartCanvas = document.getElementById('priceChart');
+
+      function isoNow() {
+        return new Date().toISOString().split('.')[0] + '.000Z';
+      }
+
+      function tomorrowAt4pmISO() {
+        const d = new Date();
+        d.setDate(d.getDate() + 1);
+        d.setHours(16, 0, 0, 0);
+        return d.toISOString().split('.')[0] + '.000Z';
+      }
+
+      async function fetchAgileRates() {
+        const url = `https://api.octopus.energy/v1/products/${PRODUCT}/electricity-tariffs/${TARIFF}/standard-unit-rates/?period_from=${isoNow()}&period_to=${tomorrowAt4pmISO()}&page_size=1500`;
+        const res = await fetch(url);
+        if (!res.ok) {
+          throw new Error(`Octopus API returned ${res.status}`);
+        }
+        const data = await res.json();
+        return data.results.map(r => ({
+          start: new Date(r.valid_from),
+          end: new Date(r.valid_to),
+          price: r.value_inc_vat
+        })).reverse();
+      }
+
+      function effectivePower(soc, chargerPower, peakPower, endPower, taperStart) {
+        if (soc < taperStart) return Math.min(chargerPower, peakPower);
+        const frac = (soc - taperStart) / (1 - taperStart);
+        const accepted = peakPower + frac * (endPower - peakPower);
+        return Math.min(chargerPower, Math.max(endPower, accepted));
+      }
+
+      function optimise(slots, params) {
+        const { energyReq, maxRuns, chargerPower, peakPower, endPower, taperStart } = params;
+        const slotHours = 0.5;
+        const maxSlots = Math.ceil(energyReq / (chargerPower * slotHours));
+        const T = slots.length;
+        const INF = 1e12;
+
+        const dp = Array.from({ length: T + 1 }, () =>
+          Array.from({ length: maxSlots + 1 }, () =>
+            Array.from({ length: maxRuns + 1 }, () => [INF, INF])
+          )
+        );
+        const parent = {};
+        dp[0][0][0][0] = 0;
+
+        function set(t, n, k, c, cost, prev) {
+          if (cost < dp[t][n][k][c]) {
+            dp[t][n][k][c] = cost;
+            parent[`${t}|${n}|${k}|${c}`] = prev;
+          }
+        }
+
+        for (let t = 0; t < T; t++) {
+          for (let n = 0; n <= maxSlots; n++) {
+            for (let k = 0; k <= maxRuns; k++) {
+              for (let c = 0; c < 2; c++) {
+                const base = dp[t][n][k][c];
+                if (base >= INF) continue;
+
+                set(t + 1, n, k, 0, base, { t, n, k, c, action: 'idle' });
+
+                if (n < maxSlots) {
+                  const soc = n / maxSlots;
+                  const pwr = effectivePower(soc, chargerPower, peakPower, endPower, taperStart);
+                  const costAdd = pwr * slotHours * slots[t].price;
+                  if (c === 1) {
+                    set(t + 1, n + 1, k, 1, base + costAdd, { t, n, k, c, action: 'cont' });
+                  } else if (k < maxRuns) {
+                    set(t + 1, n + 1, k + 1, 1, base + costAdd, { t, n, k, c, action: 'start' });
+                  }
+                }
+              }
             }
           }
         }
-      }
-    }
-  }
 
-  let best = null;
-  for (let k = 0; k <= maxRuns; k++) {
-    for (let c = 0; c < 2; c++) {
-      const cost = dp[T][maxSlots][k][c];
-      if (cost < INF && (!best || cost < best.cost)) {
-        best = { cost, t: T, n: maxSlots, k, c };
-      }
-    }
-  }
-  if (!best) return null;
-
-  const chosen = [];
-  let cur = best;
-  while (cur.t > 0) {
-    const p = parent[`${cur.t}|${cur.n}|${cur.k}|${cur.c}`];
-    if (!p) break;
-    if (p.action !== 'idle') chosen.push(cur.t - 1);
-    cur = p;
-  }
-
-  return chosen.reverse();
-}
-
-function summarise(slots, chosen, socData) {
-  if (!chosen.length) return [];
-  const groups = [];
-  let start = chosen[0];
-  for (let i = 1; i <= chosen.length; i++) {
-    if (i === chosen.length || chosen[i] !== chosen[i - 1] + 1) {
-      const end = chosen[i - 1];
-      const dur = (end - start + 1) * 0.5;
-      const avg = slots.slice(start, end + 1).reduce((a, b) => a + b.price, 0) / (end - start + 1);
-      const energy = dur * socData.powerSeries.slice(start, end + 1)
-        .reduce((a, b) => a + b, 0) / (end - start + 1);
-      groups.push({
-        start: slots[start].start,
-        end: slots[end].end,
-        dur,
-        avg,
-        energy,
-        avgPower: energy / dur
-      });
-      start = chosen[i];
-    }
-  }
-  return groups;
-}
-
-function computeSocData(slots, chosen, bs, sp, chargerPower, peakPower, endPower, taperStart) {
-  const slotHours = 0.5;
-  let soc = sp;
-  let energy = bs * sp;
-  const socStart = [];
-  const socEnd = [];
-  const powerSeries = [];
-
-  for (let i = 0; i < slots.length; i++) {
-    socStart.push(soc * 100);
-    let pwr = 0;
-    if (chosen.includes(i)) {
-      pwr = effectivePower(soc, chargerPower, peakPower, endPower, taperStart);
-      energy += pwr * slotHours;
-      soc = Math.min(energy / bs, 1);
-    }
-    socEnd.push(soc * 100);
-    powerSeries.push(pwr);
-  }
-  return { socStart, socEnd, powerSeries };
-}
-
-function drawChart(slots, chosen, socData) {
-  if (chartInstance) chartInstance.destroy();
-  const ctx = document.getElementById('priceChart');
-
-  chartInstance = new Chart(ctx, {
-    data: {
-      labels: slots.map(s => s.start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })),
-      datasets: [
-        {
-          type: 'line',
-          label: 'SoC start (%)',
-          data: socData.socStart,
-          borderColor: '#1976d2',
-          pointRadius: 0,
-          yAxisID: 'ySoc'
-        },
-        {
-          type: 'line',
-          label: 'SoC end (%)',
-          data: socData.socEnd,
-          borderColor: '#90caf9',
-          pointRadius: 0,
-          yAxisID: 'ySoc'
-        },
-        {
-          type: 'bar',
-          label: 'Price (p/kWh)',
-          data: slots.map(s => s.price),
-          backgroundColor: slots.map((_, i) => chosen.includes(i) ? '#4caf50' : '#ddd'),
-          yAxisID: 'yPrice'
-        },
-      ]
-    },
-    options: {
-      interaction: { mode: 'index', intersect: false },
-      plugins: {
-        tooltip: {
-          callbacks: {
-            afterBody: items => {
-              const i = items[0].dataIndex;
-              return `Charging power: ${socData.powerSeries[i].toFixed(2)} kW`;
+        let best = null;
+        for (let k = 0; k <= maxRuns; k++) {
+          for (let c = 0; c < 2; c++) {
+            const cost = dp[T][maxSlots][k][c];
+            if (cost < INF && (!best || cost < best.cost)) {
+              best = { cost, t: T, n: maxSlots, k, c };
             }
           }
         }
-      },
-      scales: {
-        x: { display: false },
-        yPrice: {
-          position: 'left',
-          title: { display: true, text: 'Price (p/kWh)' }
-        },
-        ySoc: {
-          position: 'right',
-          min: 0,
-          max: 100,
-          grid: { drawOnChartArea: false },
-          title: { display: true, text: 'State of Charge (%)' }
+        if (!best) return null;
+
+        const chosen = [];
+        let cur = best;
+        while (cur.t > 0) {
+          const p = parent[`${cur.t}|${cur.n}|${cur.k}|${cur.c}`];
+          if (!p) break;
+          if (p.action !== 'idle') chosen.push(cur.t - 1);
+          cur = p;
+        }
+
+        return chosen.reverse();
+      }
+
+      function summarise(slots, chosen, socData) {
+        if (!chosen.length) return [];
+        const groups = [];
+        let start = chosen[0];
+        for (let i = 1; i <= chosen.length; i++) {
+          if (i === chosen.length || chosen[i] !== chosen[i - 1] + 1) {
+            const end = chosen[i - 1];
+            const dur = (end - start + 1) * 0.5;
+            const avg = slots.slice(start, end + 1).reduce((a, b) => a + b.price, 0) / (end - start + 1);
+            const energy = dur * socData.powerSeries.slice(start, end + 1)
+              .reduce((a, b) => a + b, 0) / (end - start + 1);
+            groups.push({
+              start: slots[start].start,
+              end: slots[end].end,
+              dur,
+              avg,
+              energy,
+              avgPower: energy / dur
+            });
+            start = chosen[i];
+          }
+        }
+        return groups;
+      }
+
+      function computeSocData(slots, chosen, bs, sp, chargerPower, peakPower, endPower, taperStart) {
+        const slotHours = 0.5;
+        const chosenSet = new Set(chosen);
+        let soc = sp;
+        let energy = bs * sp;
+        const socStart = [];
+        const socEnd = [];
+        const powerSeries = [];
+
+        for (let i = 0; i < slots.length; i++) {
+          socStart.push(soc * 100);
+          let pwr = 0;
+          if (chosenSet.has(i)) {
+            pwr = effectivePower(soc, chargerPower, peakPower, endPower, taperStart);
+            energy += pwr * slotHours;
+            soc = Math.min(energy / bs, 1);
+          }
+          socEnd.push(soc * 100);
+          powerSeries.push(pwr);
+        }
+        return { socStart, socEnd, powerSeries };
+      }
+
+      function resetChartCanvas() {
+        chartCanvas.height = CHART_HEIGHT;
+        chartCanvas.style.height = `${CHART_HEIGHT}px`;
+      }
+
+      function drawChart(slots, chosen, socData) {
+        if (chartInstance) {
+          chartInstance.destroy();
+          chartInstance = null;
+        }
+        resetChartCanvas();
+        const chosenSet = new Set(chosen);
+
+        chartInstance = new Chart(chartCanvas, {
+          data: {
+            labels: slots.map(s => s.start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })),
+            datasets: [
+              {
+                type: 'line',
+                label: 'SoC start (%)',
+                data: socData.socStart,
+                borderColor: '#3b82f6',
+                backgroundColor: '#3b82f6',
+                borderWidth: 2,
+                pointRadius: 0,
+                yAxisID: 'ySoc'
+              },
+              {
+                type: 'line',
+                label: 'SoC end (%)',
+                data: socData.socEnd,
+                borderColor: '#22d3ee',
+                backgroundColor: '#22d3ee',
+                borderWidth: 2,
+                pointRadius: 0,
+                yAxisID: 'ySoc'
+              },
+              {
+                type: 'bar',
+                label: 'Price (p/kWh)',
+                data: slots.map(s => s.price),
+                backgroundColor: slots.map((_, i) => chosenSet.has(i) ? 'rgba(59, 130, 246, 0.7)' : 'rgba(156, 163, 175, 0.35)'),
+                borderColor: slots.map((_, i) => chosenSet.has(i) ? '#3b82f6' : '#1f2937'),
+                borderWidth: 1,
+                yAxisID: 'yPrice'
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+              legend: {
+                labels: { color: '#e5e7eb' }
+              },
+              tooltip: {
+                callbacks: {
+                  afterBody: items => {
+                    const i = items[0].dataIndex;
+                    return `Charging power: ${socData.powerSeries[i].toFixed(2)} kW`;
+                  }
+                }
+              }
+            },
+            scales: {
+              x: {
+                display: false,
+                grid: { color: '#1f2937' },
+                ticks: { color: '#9ca3af' }
+              },
+              yPrice: {
+                position: 'left',
+                grid: { color: '#1f2937' },
+                ticks: { color: '#9ca3af' },
+                title: { display: true, text: 'Price (p/kWh)', color: '#e5e7eb' }
+              },
+              ySoc: {
+                position: 'right',
+                min: 0,
+                max: 100,
+                grid: { drawOnChartArea: false },
+                ticks: { color: '#9ca3af' },
+                title: { display: true, text: 'State of charge (%)', color: '#e5e7eb' }
+              }
+            }
+          }
+        });
+      }
+
+      function setStatus(message, state = 'idle') {
+        statusEl.textContent = message;
+        statusEl.dataset.state = state;
+      }
+
+      function clearSchedule(message) {
+        scheduleTable.innerHTML = '';
+        const p = document.createElement('p');
+        p.className = 'empty-state';
+        p.textContent = message;
+        scheduleTable.appendChild(p);
+      }
+
+      function readNumber(id) {
+        return Number(document.getElementById(id).value);
+      }
+
+      function validateInputs(values) {
+        const { chargerPower, bs, sp, tp, maxRuns, peak, endP, taperStart } = values;
+        if ([chargerPower, bs, sp, tp, maxRuns, peak, endP, taperStart].some(value => !Number.isFinite(value))) {
+          return 'All inputs must be valid numbers.';
+        }
+        if (chargerPower <= 0 || bs <= 0 || peak <= 0 || endP <= 0) {
+          return 'Power and battery values must be greater than zero.';
+        }
+        if (sp < 0 || sp > 1 || tp < 0 || tp > 1 || taperStart < 0 || taperStart >= 1) {
+          return 'Percent values must stay in their allowed ranges.';
+        }
+        if (tp <= sp) {
+          return 'Target charge must be greater than start charge.';
+        }
+        if (maxRuns < 1 || !Number.isInteger(maxRuns)) {
+          return 'Max contiguous runs must be a whole number greater than zero.';
+        }
+        return '';
+      }
+
+      function renderSchedule(rows) {
+        scheduleTable.innerHTML = '';
+        const table = document.createElement('table');
+        table.innerHTML = '<thead><tr><th>Slot start</th><th>Slot stop</th><th>Duration (h)</th><th>Energy added (kWh)</th><th>Avg power (kW)</th><th>Avg price</th></tr></thead>';
+        const tbody = document.createElement('tbody');
+        rows.forEach(r => {
+          const tr = document.createElement('tr');
+          [
+            r.start.toLocaleString(),
+            r.end.toLocaleString(),
+            r.dur.toFixed(2),
+            r.energy.toFixed(2),
+            r.avgPower.toFixed(2),
+            r.avg.toFixed(2)
+          ].forEach(value => {
+            const td = document.createElement('td');
+            td.textContent = value;
+            tr.appendChild(td);
+          });
+          tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        scheduleTable.appendChild(table);
+      }
+
+      async function runSchedule() {
+        runButton.disabled = true;
+        setStatus('Loading Agile rates.');
+
+        try {
+          const values = {
+            chargerPower: readNumber('chargerPower'),
+            bs: readNumber('batterySize'),
+            sp: readNumber('startPct') / 100,
+            tp: readNumber('targetPct') / 100,
+            maxRuns: readNumber('maxRuns'),
+            peak: readNumber('peakPower'),
+            endP: readNumber('endPower'),
+            taperStart: readNumber('taperThresh') / 100
+          };
+          const validationMessage = validateInputs(values);
+          if (validationMessage) {
+            clearSchedule('No schedule calculated.');
+            setStatus(validationMessage, 'error');
+            return;
+          }
+
+          const slots = await fetchAgileRates();
+          const energyReq = values.bs * (values.tp - values.sp);
+          const chosen = optimise(slots, {
+            energyReq,
+            maxRuns: values.maxRuns,
+            chargerPower: values.chargerPower,
+            peakPower: values.peak,
+            endPower: values.endP,
+            taperStart: values.taperStart
+          });
+
+          if (!chosen) {
+            clearSchedule('No feasible schedule found for these inputs.');
+            setStatus('No feasible schedule found.', 'error');
+            return;
+          }
+
+          const socData = computeSocData(slots, chosen, values.bs, values.sp, values.chargerPower, values.peak, values.endP, values.taperStart);
+          drawChart(slots, chosen, socData);
+
+          const rows = summarise(slots, chosen, socData);
+          renderSchedule(rows);
+          setStatus(`Calculated ${rows.length} charging window${rows.length === 1 ? '' : 's'}.`);
+        } catch (err) {
+          clearSchedule('No schedule calculated.');
+          setStatus(err instanceof Error ? err.message : 'Unable to calculate schedule.', 'error');
+        } finally {
+          runButton.disabled = false;
         }
       }
-    }
-  });
-}
 
-async function runSchedule() {
-  const slots = await fetchAgileRates();
+      runButton.addEventListener('click', runSchedule);
 
-  const chargerPower = +document.getElementById('chargerPower').value;
-  const bs = +document.getElementById('batterySize').value;
-  const sp = +document.getElementById('startPct').value / 100;
-  const tp = +document.getElementById('targetPct').value / 100;
-  const maxRuns = +document.getElementById('maxRuns').value;
-  const peak = +document.getElementById('peakPower').value;
-  const endP = +document.getElementById('endPower').value;
-  const taperStart = +document.getElementById('taperThresh').value / 100;
-
-  const energyReq = bs * (tp - sp);
-  const chosen = optimise(slots, {
-    energyReq,
-    maxRuns,
-    chargerPower,
-    peakPower: peak,
-    endPower: endP,
-    taperStart
-  });
-
-  if (!chosen) {
-    document.getElementById('scheduleTable').innerText = 'No feasible schedule';
-    return;
-  }
-
-  const socData = computeSocData(slots, chosen, bs, sp, chargerPower, peak, endP, taperStart);
-  drawChart(slots, chosen, socData);
-
-  const rows = summarise(slots, chosen, socData);
-  let html = '<table><tr><th>Slot Start</th><th>Slot Stop</th><th>Duration (h)</th><th>Energy Added (kWh)</th><th>Avg Power (kW)</th><th>Avg Price</th></tr>';
-  rows.forEach(r => {
-    html += `<tr><td>${r.start.toLocaleString()}</td><td>${r.end.toLocaleString()}</td><td>${r.dur.toFixed(2)}</td><td>${r.energy.toFixed(2)}</td><td>${r.avgPower.toFixed(2)}</td><td>${r.avg.toFixed(2)}</td></tr>`;
-  });
-  html += '</table>';
-  document.getElementById('scheduleTable').innerHTML = html;
-}
-
-// Bind after definition to guarantee availability
-
-document.getElementById('runBtn').addEventListener('click', runSchedule);
-
-// Basic sanity tests
-console.assert(typeof runSchedule === 'function', 'runSchedule should be defined');
-console.assert(effectivePower(0.5, 7, 46, 2, 0.8) <= 7, 'Effective power must not exceed charger power');
-
-</script>
-</body>
+      console.assert(typeof runSchedule === 'function', 'runSchedule should be defined');
+      console.assert(effectivePower(0.5, 7, 46, 2, 0.8) <= 7, 'Effective power must not exceed charger power');
+    </script>
+  </body>
 </html>
